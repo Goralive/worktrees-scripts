@@ -1,5 +1,5 @@
 # Define the repository URL and the destination directory
-REPO_URL="https://github.com/tomups/worktrees-scripts.git"
+REPO_URL="https://github.com/goralive/worktrees-scripts"
 DEST_DIR="$HOME/.local/bin"
 
 # Create the destination directory if it does not exist
@@ -25,7 +25,7 @@ chmod +x "$DEST_DIR"/wtclone.sh
 # Add git aliases for each script
 for script in wtadd.sh wtremove.sh wtclone.sh; do
   script_name=$(basename "$script" .sh)
-  git config --global alias.$script_name "!$DEST_DIR/$script"
+  git config --global alias."$script_name" "!$DEST_DIR/$script"
 done
 
 # Notify the user
