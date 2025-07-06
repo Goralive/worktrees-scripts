@@ -9,7 +9,8 @@ YELLOW="\033[0;33m"
 CLEAR="\033[0m"
 VERBOSE=
 
-echo "$1"
+echo $1
+
 function usage {
   cat <<EOF
 worktree [-v] <branch name>
@@ -118,55 +119,70 @@ function _worktree {
 
   # this will fail for any files with \n in their names. don't do that.
   IFS=$'\n'
+  # Files to exclude
+  FILE_EXTENSIONS=("envrc" "env" "env.local" "tool-versions" "mise.toml")
+  YAML_FILES=("application-local.yml")
 
-  # (XXX: should I add some mechanism for users to spcify this list? perhaps
-  # ~/.config/worktree/untracked or something?)
-  #
-  # this is the best of a bunch of bad options for reading the files into an
-  # array. We're often executing in bash or zsh, so we're going to let them
-  # use their file splitting rules, with an explicit IFS. We can't use find's
-  # exec because we want to use cp_cow to copy files copy-on-write when
-  # possible.
-  #
-  # Skip any of these files if they're found within node_modules.
-  #
-  # Putting the `-not -path` argument first is a great deal faster than the
-  # other way around
-  #
-  # shellcheck disable=SC2207
-  platform=$(uname)
-  if $is_worktree; then
-    COPY_SOURCE="."
-  else
-    COPY_SOURCE=./$(git rev-parse --abbrev-ref HEAD)
-  fi
-  EXCLUDE_PATHS=("*node_modules*" "*dist*" "*build*")
-  FILE_EXTENSIONS=("envrc" "env" "env.local" "tool-versions" "mise.toml" ".env" "application-local.yml")
-
+  # Build patterns
   extensions_pattern=$(
     IFS='|'
     echo "${FILE_EXTENSIONS[*]}"
   )
-  FILE_PATTERNS=".*\/\.(${extensions_pattern})"
+  yaml_pattern=$(
+    IFS='|'
+    echo "${YAML_FILES[*]}"
+  )
 
-  exclude_pattern=""
-  for exclude in "${EXCLUDE_PATHS[@]}"; do
-    exclude_pattern="$exclude_pattern -not -path '$exclude'"
-  done
+  # Create combined regex pattern that handles both root and subdirectory files
+  DOT_FILE_PATTERNS="(^|.*\/)\.(${extensions_pattern})"
+  YAML_FILE_PATTERNS=".*\/(${yaml_pattern})"
 
-  if [ "$platform" = "Darwin" ]; then
-    mapfile -t files_to_copy < <(find -E "$COPY_SOURCE" "$exclude_pattern" -and \
-      -iregex "$FILE_PATTERNS")
+  # Build exclude pattern
+  EXCLUDE_PATHS=("*node_modules*" "*dist*" "*build*")
+
+  platform=$(uname)
+  if $is_worktree; then
+    copy_source="."
   else
-    mapfile -t files_to_copy < <(find "$COPY_SOURCE" "$exclude_pattern" -and \
-      -regextype posix-extended -iregex "$FILE_PATTERNS")
+    copy_source=./$(git rev-parse --abbrev-ref HEAD)
   fi
 
+  # Use array assignment (no mapfile)
+  # shellcheck disable=SC2207
+  if [ "$platform" = "Darwin" ]; then
+    files_to_copy=($(find -E "$copy_source" \
+      -not -path "*node_modules*" \
+      -not -path "*dist*" \
+      -not -path "*build*" \
+      \( -iregex "$DOT_FILE_PATTERNS" -o -iregex "$YAML_FILE_PATTERNS" \)))
+  else
+    files_to_copy=($(find "$copy_source" \
+      -not -path "*node_modules*" \
+      -not -path "*dist*" \
+      -not -path "*build*" \
+      -regextype posix-extended \
+      \( -iregex "$DOT_FILE_PATTERNS" -o -iregex "$YAML_FILE_PATTERNS" \)))
+  fi
+
+  # Copy the files from the files_to_copy array
   for f in "${files_to_copy[@]}"; do
-    target_path="${f#"$COPY_SOURCE"/}"
+    # Handle both cases: files in root and in subdirectories
+    if [[ "$f" == "$copy_source/"* ]]; then
+      # File in subdirectory - remove the copy_source prefix
+      target_path="${f#$copy_source/}"
+    else
+      # File in root directory - just use the filename
+      target_path="${f##*/}"
+    fi
+
+    # Create target directory if it doesn't exist
+    target_dir="$parent_dir/$dirname/$(dirname "$target_path")"
+    if [ "$target_dir" != "$parent_dir/$dirname/." ]; then
+      mkdir -p "$target_dir"
+    fi
+
     cp_cow "$f" "$parent_dir/$dirname/$target_path"
   done
-
   # return the shell to normal splitting mode
   unset IFS
 
@@ -201,4 +217,3 @@ while true; do
 done
 
 _worktree "$@"
-
